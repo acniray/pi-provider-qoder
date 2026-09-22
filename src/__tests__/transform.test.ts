@@ -177,7 +177,7 @@ describe("transformMessagesForQoder", () => {
     });
   });
 
-  it("handles assistant message with thinking block", () => {
+  it("replays assistant thinking in reasoning_content instead of visible XML text", () => {
     const msgs = [
       {
         role: "assistant",
@@ -188,8 +188,37 @@ describe("transformMessagesForQoder", () => {
       },
     ] as unknown as Message[];
     const result = transformMessagesForQoder(msgs);
-    expect(result[0].content).toContain("<thinking>let me think</thinking>");
-    expect(result[0].content).toContain("answer");
+    const assistant = result[0] as { content: unknown; reasoning_content?: string };
+    expect(assistant.content).toBe("answer");
+    expect(assistant.reasoning_content).toBe("let me think");
+    expect(String(assistant.content)).not.toContain("<thinking>");
+  });
+
+  it("keeps thinking separate from a structured tool call during replay", () => {
+    const msgs = [
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "I should inspect the environment first." },
+          { type: "toolCall", id: "call_probe", name: "bash", arguments: { command: "echo ok" } },
+        ],
+      },
+      { role: "toolResult", toolCallId: "call_probe", content: "ok" },
+    ] as unknown as Message[];
+
+    const result = transformMessagesForQoder(msgs);
+    const assistant = result[0] as {
+      content: unknown;
+      reasoning_content?: string;
+      tool_calls?: Array<{ id?: string; function: { name?: string; arguments: string } }>;
+    };
+
+    expect(assistant.content).toBe(" ");
+    expect(assistant.reasoning_content).toBe("I should inspect the environment first.");
+    expect(assistant.tool_calls?.[0]?.id).toBe("call_probe");
+    expect(assistant.tool_calls?.[0]?.function.name).toBe("bash");
+    expect(result[1]).toMatchObject({ role: "tool", tool_call_id: "call_probe", content: "ok" });
+    expect(JSON.stringify(result)).not.toContain("<thinking>");
   });
 
   it("handles toolResult messages", () => {
