@@ -257,7 +257,10 @@ export function streamQoder(
       // Match qodercli's conservative default output budget. Pi may cap it
       // lower for special calls, and QODER_MAX_OUTPUT_TOKENS can opt into a
       // larger budget when a workflow genuinely needs long generations.
-      let maxTokens = MAX_OUTPUT_TOKENS;
+      let maxTokens =
+        typeof model.maxTokens === "number" && model.maxTokens > 0
+          ? model.maxTokens
+          : MAX_OUTPUT_TOKENS;
       if (options?.maxTokens && options.maxTokens < maxTokens) {
         maxTokens = options.maxTokens;
       }
