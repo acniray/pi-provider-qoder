@@ -103,6 +103,7 @@ export async function autoLoginQoderFromEnvironment(providerID: string, mode: Qo
 
   const timingEnabled = process.env.QODER_DEBUG_TIMING === "1";
   const timingStart = performance.now();
+  const patFastPathEnabled = process.env.QODER_PAT_FAST_PATH === "1";
   let authSource: "cache" | "exchange" = "exchange";
 
   // Fast path: PAT-based credentials already persist the original PAT in the
@@ -114,7 +115,7 @@ export async function autoLoginQoderFromEnvironment(providerID: string, mode: Qo
   // so expires > Date.now() is sufficient here.
   const cached = getCachedCredentials("", providerID);
   let credentials: OAuthCredentials | undefined;
-  if (cached?.access && cached.userID && cached.refresh && isPatRefresh(cached.refresh)) {
+  if (patFastPathEnabled && cached?.access && cached.userID && cached.refresh && isPatRefresh(cached.refresh)) {
     const { pat: cachedPat } = decodePatRefresh(cached.refresh);
     if (cachedPat === pat && cached.expires > Date.now()) {
       credentials = cached;
@@ -156,6 +157,7 @@ export async function autoLoginQoderFromEnvironment(providerID: string, mode: Qo
         provider: providerID,
         mode,
         auth: authSource,
+        patFastPath: patFastPathEnabled ? "enabled" : "disabled",
         modelCache: modelCacheStale ? "refresh" : "fresh",
         totalMs: Math.round(performance.now() - timingStart),
       }),
