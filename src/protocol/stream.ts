@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
 import * as PiAi from "@earendil-works/pi-ai";
 import {
   type Api,
@@ -29,6 +29,30 @@ interface ToolCallState {
   emittedStart?: boolean;
   emittedEnd?: boolean;
   contentIndex: number;
+}
+
+interface QoderTraceState {
+  enabled: boolean;
+  dir?: string;
+  base?: string;
+  sawDsml: boolean;
+  sawStructuredToolCall: boolean;
+  finishReasons: string[];
+  dsmlChannels: string[];
+}
+
+function hasToolProtocolLeak(text: string): boolean {
+  return (
+    text.includes("DSML") ||
+    text.includes("｜DSML｜") ||
+    /<\/?tool_call\b/i.test(text) ||
+    /<\/?function_call\b/i.test(text)
+  );
+}
+
+function appendTraceEvent(trace: QoderTraceState, event: Record<string, unknown>): void {
+  if (!trace.enabled || !trace.base) return;
+  appendFileSync(`${trace.base}.events.jsonl`, `${JSON.stringify(event)}\n`, "utf8");
 }
 
 function stableHash(prefix: string, ...inputs: string[]): string {
@@ -174,6 +198,15 @@ export function streamQoder(
     let timingEncoded = timingStart;
     let timingHeaders = timingStart;
     let timingFirstByte = 0;
+    const traceDir = process.env.QODER_DEBUG_TRACE_DIR?.trim();
+    const trace: QoderTraceState = {
+      enabled: !!traceDir,
+      dir: traceDir || undefined,
+      sawDsml: false,
+      sawStructuredToolCall: false,
+      finishReasons: [],
+      dsmlChannels: [],
+    };
     const stage = (name: string, extra: Record<string, unknown> = {}) => {
       if (!timingEnabled) return;
       console.error(
@@ -353,6 +386,30 @@ export function streamQoder(
         },
       };
 
+      if (trace.enabled && trace.dir) {
+        mkdirSync(trace.dir, { recursive: true });
+        const traceStamp = new Date().toISOString().replace(/[:.]/g, "-");
+        trace.base = `${trace.dir}/${traceStamp}-${model.provider}-${model.id}-${recordID}`;
+        writeFileSync(
+          `${trace.base}.request.json`,
+          JSON.stringify(
+            {
+              provider: model.provider,
+              model: model.id,
+              qoderModel,
+              sessionId: sessionID,
+              requestSetId: recordID,
+              messageCount: normalizedMessages.length + (systemText ? 1 : 0),
+              toolCount: toolsRaw?.length ?? 0,
+              requestBody: reqBody,
+            },
+            null,
+            2,
+          ),
+          "utf8",
+        );
+      }
+
       const debugDumpPath = process.env.QODER_DEBUG_REQUEST_DUMP?.trim();
       if (debugDumpPath) {
         // Diagnostic-only dump of the decoded request body. No auth headers,
@@ -495,6 +552,18 @@ export function streamQoder(
             if (!innerStr) continue;
 
             const inner = JSON.parse(innerStr);
+            appendTraceEvent(trace, {
+              type: "sse",
+              id: inner.id,
+              model: inner.model,
+              choice: inner.choices?.[0]
+                ? {
+                    finish_reason: inner.choices[0].finish_reason,
+                    delta: inner.choices[0].delta,
+                  }
+                : undefined,
+              usage: inner.usage,
+            });
             if (inner.id) output.responseId = inner.id as string;
             if (inner.model) output.responseModel = inner.model as string;
             if (inner.usage) {
@@ -533,6 +602,10 @@ export function streamQoder(
               if (delta) {
                 // 1. Process reasoning/thinking content (API reasoning)
                 if (delta.reasoning_content) {
+                  if (hasToolProtocolLeak(delta.reasoning_content)) {
+                    trace.sawDsml = true;
+                    if (!trace.dsmlChannels.includes("reasoning_content")) trace.dsmlChannels.push("reasoning_content");
+                  }
                   // Qoder's backend sometimes routes a literal `<thinking>`
                   // opener into reasoning_content (with the matching
                   // `</thinking>` closer landing in the content stream). Strip
@@ -558,6 +631,10 @@ export function streamQoder(
 
                 // 2. Process text content
                 if (delta.content) {
+                  if (hasToolProtocolLeak(delta.content)) {
+                    trace.sawDsml = true;
+                    if (!trace.dsmlChannels.includes("content")) trace.dsmlChannels.push("content");
+                  }
                   // End API thinking block if active
                   if (thinkingBlockIndex !== -1) {
                     const block = output.content[thinkingBlockIndex] as ThinkingContent;
@@ -591,6 +668,7 @@ export function streamQoder(
 
                 // 3. Process tool calls
                 if (delta.tool_calls && Array.isArray(delta.tool_calls)) {
+                  if (delta.tool_calls.length > 0) trace.sawStructuredToolCall = true;
                   for (const tc of delta.tool_calls) {
                     const idx = tc.index ?? 0;
                     if (!toolCallsState[idx]) {
@@ -644,6 +722,7 @@ export function streamQoder(
               }
 
               if (choice.finish_reason) {
+                trace.finishReasons.push(String(choice.finish_reason));
                 // Preserve the real upstream finish_reason (e.g. "length",
                 // "content_filter") instead of forcing "stop" later.
                 output.stopReason = choice.finish_reason as AssistantMessage["stopReason"];
@@ -734,6 +813,30 @@ export function streamQoder(
             input: output.usage.input,
             output: output.usage.output,
           }),
+        );
+      }
+
+      if (trace.enabled && trace.base) {
+        writeFileSync(
+          `${trace.base}.summary.json`,
+          JSON.stringify(
+            {
+              provider: model.provider,
+              model: model.id,
+              responseModel: output.responseModel,
+              responseId: output.responseId,
+              stopReason: output.stopReason,
+              sawDsml: trace.sawDsml,
+              dsmlChannels: trace.dsmlChannels,
+              sawStructuredToolCall: trace.sawStructuredToolCall,
+              finishReasons: trace.finishReasons,
+              usage: output.usage,
+              contentTypes: output.content.map((block) => block.type),
+            },
+            null,
+            2,
+          ),
+          "utf8",
         );
       }
 
