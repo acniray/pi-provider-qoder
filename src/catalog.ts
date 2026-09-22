@@ -7,25 +7,28 @@ import { getQoderBaseUrl, getQoderModelListURL, getQoderRegionConfig, type Qoder
 
 export const ZERO_COST = Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
-/**
- * Match qodercli's default generation budget. Larger values can increase
- * reservation/prefill pressure and diverge from the official client.
- * Override only for explicit experiments.
- */
+/** Fallback when the live catalog omits max_output_tokens. */
 export const MAX_OUTPUT_TOKENS = (() => {
   const raw = Number.parseInt(process.env.QODER_MAX_OUTPUT_TOKENS || "", 10);
   return Number.isFinite(raw) && raw > 0 ? raw : 32000;
 })();
 
-/**
- * Official-client-like fallback when the catalog omits max_input_tokens.
- * Larger selectable context_config modes remain available via QODER_CONTEXT_MODE=max.
- */
+/** Fallback only when the live catalog exposes neither context_config nor max_input_tokens. */
 export const DEFAULT_CONTEXT_WINDOW = 200000;
 
 function preferMaxContext(): boolean {
   const mode = (process.env.QODER_CONTEXT_MODE || "").trim().toLowerCase();
   return mode === "max" || mode === "1m" || mode === "largest";
+}
+
+/** Resolve the model's output-token limit from the live catalog. */
+export function outputTokensFromCatalog(entry: QoderModelEntry): number {
+  const override = Number.parseInt(process.env.QODER_MAX_OUTPUT_TOKENS || "", 10);
+  if (Number.isFinite(override) && override > 0) return override;
+  if (typeof entry.max_output_tokens === "number" && entry.max_output_tokens > 0) {
+    return entry.max_output_tokens;
+  }
+  return MAX_OUTPUT_TOKENS;
 }
 
 /** Shape of a single entry returned by the Qoder /model/list endpoint. */
@@ -34,6 +37,7 @@ export interface QoderModelEntry {
   enable?: boolean;
   display_name?: string;
   max_input_tokens?: number;
+  max_output_tokens?: number;
   context_config?: Record<string, { token_count?: number; is_default?: boolean }>;
   is_vl?: boolean;
   is_reasoning?: boolean;
@@ -539,7 +543,7 @@ export function getCachedModels(mode: QoderMode): QoderModelDef[] {
       const staticModel = (mode === "cn" ? staticCnModels : staticModels).find((seed) => seed.upstreamKey === model.id);
       const perfDefaults = {
         contextWindow: config ? contextWindowFromCatalog(config) : model.contextWindow,
-        maxTokens: MAX_OUTPUT_TOKENS,
+        maxTokens: config ? outputTokensFromCatalog(config) : model.maxTokens,
       };
       if (display) return { ...model, ...perfDefaults, id: toQoderModelId(display), name: display };
       if (staticModel) return { ...model, ...perfDefaults, id: staticModel.id, name: staticModel.name };
@@ -587,13 +591,9 @@ export function getCachedModelConfig(modelId: string, mode: QoderMode): QoderMod
 
 /** Resolve contextWindow from a catalog entry. Exported for tests. */
 export function contextWindowFromCatalog(entry: QoderModelEntry): number {
-  // qodercli uses max_input_tokens as the normal model budget. The selectable
-  // context_config entries (200K/400K/1M) are explicit modes, not a reason to
-  // silently make every session a 1M-context session.
-  if (!preferMaxContext() && typeof entry.max_input_tokens === "number" && entry.max_input_tokens > 0) {
-    return entry.max_input_tokens;
-  }
-
+  // Pi's contextWindow represents model capacity, not Qoder's baseline
+  // max_input_tokens accounting field. Prefer the largest context mode the
+  // live catalog actually advertises (for example 200K/400K/1M).
   const contextConfig = entry.context_config;
   if (contextConfig && typeof contextConfig === "object") {
     let advertised = 0;
@@ -605,6 +605,7 @@ export function contextWindowFromCatalog(entry: QoderModelEntry): number {
     if (advertised > 0) return advertised;
   }
 
+  // Models without selectable context modes still expose their real input cap.
   if (typeof entry.max_input_tokens === "number" && entry.max_input_tokens > 0) {
     return entry.max_input_tokens;
   }
@@ -708,7 +709,7 @@ export async function updateQoderModelsCache(
         input: isVL ? ["text", "image"] : ["text"],
         cost: ZERO_COST,
         contextWindow: ctxLen,
-        maxTokens: MAX_OUTPUT_TOKENS,
+        maxTokens: outputTokensFromCatalog(entry),
       });
     }
 
