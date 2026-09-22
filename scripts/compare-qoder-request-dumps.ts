@@ -67,7 +67,28 @@ const A=normalize(load(aPath));
 const B=normalize(load(bPath));
 walk(A,B);
 
+function summary(x:J){
+  return {
+    messageCount: Array.isArray(x.messages) ? x.messages.length : 0,
+    messageRoles: Array.isArray(x.messages) ? x.messages.map((m:J)=>m?.role) : [],
+    toolCount: Array.isArray(x.tools) ? x.tools.length : 0,
+    toolNames: Array.isArray(x.tools) ? x.tools.map((t:J)=>t?.function?.name ?? t?.name ?? "<unnamed>") : [],
+    systemType: Array.isArray(x.system) ? "array" : typeof x.system,
+    systemLength:
+      typeof x.system === "string"
+        ? x.system.length
+        : Array.isArray(x.system)
+          ? JSON.stringify(x.system).length
+          : 0,
+    maxTokens: x.parameters?.max_tokens,
+    enableThinking: x.parameters?.enable_thinking,
+    reasoningEffort: x.parameters?.reasoning_effort,
+  };
+}
+
 console.log(`A: ${aPath}`);
+console.log(JSON.stringify(summary(A), null, 2));
 console.log(`B: ${bPath}`);
+console.log(JSON.stringify(summary(B), null, 2));
 console.log(`Differences: ${diffs.length}`);
 for(const d of diffs) console.log(d);
