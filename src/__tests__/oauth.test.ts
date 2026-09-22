@@ -68,6 +68,7 @@ describe("oauth autoLoginQoderFromEnvironment", () => {
     vi.clearAllMocks();
     process.env = { ...originalEnv };
     clearPatEnv();
+    delete process.env.QODER_PAT_FAST_PATH;
     clearQoderAuthMemCache();
     originalAuth = existsSync(AUTH_FILE) ? readFileSync(AUTH_FILE, "utf8") : undefined;
   });
@@ -117,6 +118,7 @@ describe("oauth autoLoginQoderFromEnvironment", () => {
   });
 
   it("does zero network auth/catalog work for same PAT + valid job token + fresh model cache", async () => {
+    process.env.QODER_PAT_FAST_PATH = "1";
     process.env.QODER_PERSONAL_ACCESS_TOKEN = "pt-global-same";
     vi.mocked(updateQoderModelsCache).mockClear();
     const { isCacheStale } = await import("../catalog.js");
@@ -144,6 +146,7 @@ describe("oauth autoLoginQoderFromEnvironment", () => {
   });
 
   it("reuses the job token but refreshes a stale model cache with one network call", async () => {
+    process.env.QODER_PAT_FAST_PATH = "1";
     process.env.QODER_PERSONAL_ACCESS_TOKEN = "pt-global-same";
     const { isCacheStale } = await import("../catalog.js");
     vi.mocked(isCacheStale).mockReturnValueOnce(true);
@@ -175,6 +178,7 @@ describe("oauth autoLoginQoderFromEnvironment", () => {
   });
 
   it("re-exchanges when the cached PAT differs or the job token is expired", async () => {
+    process.env.QODER_PAT_FAST_PATH = "1";
     process.env.QODER_PERSONAL_ACCESS_TOKEN = "pt-global-current";
     const auth = existsSync(AUTH_FILE) ? JSON.parse(readFileSync(AUTH_FILE, "utf8")) : {};
 
