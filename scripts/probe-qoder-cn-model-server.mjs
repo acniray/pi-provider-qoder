@@ -23,20 +23,31 @@ function redact(value) {
     });
 }
 
-function parsePat(refresh) {
-  if (typeof refresh !== "string" || !refresh.startsWith("pat|")) return "";
-  return refresh.split("|")[1] || "";
+function parsePatRefresh(refresh) {
+  if (typeof refresh !== "string" || !refresh.startsWith("pat|")) {
+    return { pat: "", machineId: "" };
+  }
+  const parts = refresh.split("|");
+  return {
+    pat: parts[1] || "",
+    machineId: parts[4] || "",
+  };
 }
 
-async function exchangePat(pat) {
+async function exchangePat(pat, machineId = "") {
   const res = await fetch(EXCHANGE_URL, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
       Accept: "application/json",
-      "User-Agent": "pi-provider-qoder-probe",
+      "User-Agent": "qoder/1.1.58",
+      "Cosy-Version": "1.1.58",
+      "Cosy-ClientType": "5",
     },
-    body: JSON.stringify({ personal_token: pat }),
+    body: JSON.stringify({
+      personal_token: pat,
+      ...(machineId ? { machine_id: machineId } : {}),
+    }),
   });
   if (!res.ok) {
     const text = redact((await res.text().catch(() => "")).slice(0, 300));
@@ -69,11 +80,11 @@ async function loadCredentials() {
 
   let jobToken = typeof creds.access === "string" ? creds.access : "";
   const expires = Number(creds.expires || 0);
-  const pat = parsePat(creds.refresh);
+  const { pat, machineId } = parsePatRefresh(creds.refresh);
 
   if ((!jobToken || (expires > 0 && expires <= Date.now() + 60_000)) && pat) {
     console.log("Job token: refreshing from saved PAT");
-    jobToken = await exchangePat(pat);
+    jobToken = await exchangePat(pat, machineId);
   } else {
     console.log("Job token: found");
   }
@@ -89,7 +100,10 @@ async function loadCredentials() {
     console.log("Stored token expiry: unknown");
   }
 
-  return { jobToken };
+  console.log(`Saved PAT: ${pat ? "found" : "not found"}`);
+  console.log(`Saved machine_id: ${machineId ? "found" : "not found"}`);
+
+  return { jobToken, pat, machineId };
 }
 
 async function fetchUserInfo(jobToken) {
@@ -287,13 +301,23 @@ async function main() {
   console.log(`Auth file: ${AUTH_FILE}`);
   console.log(`Model: ${MODEL}`);
 
-  const { jobToken } = await loadCredentials();
+  const { jobToken, pat, machineId } = await loadCredentials();
   const candidates = await fetchUserInfo(jobToken);
 
-  const tokenCandidates =
-    candidates.length > 0
-      ? candidates
-      : [["job_token_fallback", jobToken]];
+  const tokenCandidates = [];
+
+  if (pat) {
+    try {
+      console.log("Official-style PAT exchange: trying saved PAT + machine_id");
+      const officialStyleToken = await exchangePat(pat, machineId);
+      tokenCandidates.push(["official_style_pat_exchange", officialStyleToken]);
+    } catch (error) {
+      console.log(`Official-style PAT exchange failed: ${redact(error instanceof Error ? error.message : String(error))}`);
+    }
+  }
+
+  for (const candidate of candidates) tokenCandidates.push(candidate);
+  tokenCandidates.push(["stored_job_token", jobToken]);
 
   for (const [name, token] of tokenCandidates) {
     const result = await probeWithToken(name, token);
