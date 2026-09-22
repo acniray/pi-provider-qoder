@@ -27,6 +27,7 @@
     "test": "vitest run",
     "test:live": "tsx scripts/record-live-fixtures.ts",
     "test:watch": "vitest",
+    "probe:qoder-cn": "node scripts/probe-qoder-cn-model-server.mjs",
     "prepare": "npm run build",
     "prepublishOnly": "npm run check && npm run build"
   },
