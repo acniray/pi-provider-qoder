@@ -29,7 +29,8 @@
     "test:watch": "vitest",
     "prepare": "npm run build",
     "prepublishOnly": "npm run check && npm run build",
-    "probe:qoder-cn-legacy": "tsx scripts/probe-qoder-cn-legacy.ts"
+    "probe:qoder-cn-legacy": "tsx scripts/probe-qoder-cn-legacy.ts",
+    "probe:qoder-cn-tool-shapes": "tsx scripts/probe-qoder-cn-tool-shapes.ts"
   },
   "pi": {
     "extensions": [
