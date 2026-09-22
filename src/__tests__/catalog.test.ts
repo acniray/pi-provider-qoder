@@ -42,14 +42,12 @@ describe("staticModels", () => {
     expect(new Set(ids).size).toBe(ids.length);
   });
 
-  it("uses a 1M context window for models confirmed to support it", () => {
-    // Global lite was live-tested through 1,000K tokens (issue #13). auto,
-    // efficient, and gm51model share the same Qoder 1M catalog family.
+  it("uses the conservative default context window for static models without a smaller explicit cap", () => {
     for (const key of ["auto", "efficient", "lite", "gm51model"]) {
       const model = staticModels.find((m) => m.upstreamKey === key);
       expect(model, key).toBeDefined();
       expect(model?.contextWindow).toBe(DEFAULT_CONTEXT_WINDOW);
-      expect(model?.contextWindow).toBe(1_000_000);
+      expect(model?.contextWindow).toBe(200_000);
     }
   });
 
@@ -121,15 +119,33 @@ describe("staticCnModels", () => {
 });
 
 describe("contextWindowFromCatalog", () => {
-  it("uses the largest advertised context_config token_count", () => {
+  it("prefers max_input_tokens for the normal context budget", () => {
     expect(
       contextWindowFromCatalog({
+        max_input_tokens: 180000,
         context_config: {
-          small: { token_count: 200000 },
-          large: { token_count: 1000000, is_default: true },
+          small: { token_count: 200000, is_default: true },
+          large: { token_count: 1000000 },
         },
       }),
-    ).toBe(1000000);
+    ).toBe(180000);
+  });
+
+  it("uses the largest context_config token_count when max mode is explicitly enabled", () => {
+    process.env.QODER_CONTEXT_MODE = "max";
+    try {
+      expect(
+        contextWindowFromCatalog({
+          max_input_tokens: 180000,
+          context_config: {
+            small: { token_count: 200000, is_default: true },
+            large: { token_count: 1000000 },
+          },
+        }),
+      ).toBe(1000000);
+    } finally {
+      delete process.env.QODER_CONTEXT_MODE;
+    }
   });
 
   it("keeps an advertised 200K window instead of the 1M fallback", () => {
@@ -140,8 +156,13 @@ describe("contextWindowFromCatalog", () => {
     ).toBe(200000);
   });
 
-  it("falls back to 1M when the catalog omits context_config", () => {
-    expect(contextWindowFromCatalog({ key: "lite", max_input_tokens: 180000 })).toBe(DEFAULT_CONTEXT_WINDOW);
+  it("uses max_input_tokens when the catalog omits context_config", () => {
+    expect(contextWindowFromCatalog({ key: "lite", max_input_tokens: 180000 })).toBe(180000);
+  });
+
+  it("falls back to the conservative default when the catalog provides no context limit", () => {
+    expect(contextWindowFromCatalog({ key: "lite" })).toBe(DEFAULT_CONTEXT_WINDOW);
+    expect(DEFAULT_CONTEXT_WINDOW).toBe(200000);
   });
 });
 
