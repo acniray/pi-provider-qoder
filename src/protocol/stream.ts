@@ -1,5 +1,5 @@
 import crypto from "node:crypto";
-import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import * as PiAi from "@earendil-works/pi-ai";
 import {
   type Api,
@@ -39,6 +39,7 @@ interface QoderTraceState {
   sawStructuredToolCall: boolean;
   finishReasons: string[];
   dsmlChannels: string[];
+  events: Record<string, unknown>[];
 }
 
 function hasToolProtocolLeak(text: string): boolean {
@@ -51,8 +52,8 @@ function hasToolProtocolLeak(text: string): boolean {
 }
 
 function appendTraceEvent(trace: QoderTraceState, event: Record<string, unknown>): void {
-  if (!trace.enabled || !trace.base) return;
-  appendFileSync(`${trace.base}.events.jsonl`, `${JSON.stringify(event)}\n`, "utf8");
+  if (!trace.enabled) return;
+  trace.events.push(event);
 }
 
 function stableHash(prefix: string, ...inputs: string[]): string {
@@ -206,6 +207,7 @@ export function streamQoder(
       sawStructuredToolCall: false,
       finishReasons: [],
       dsmlChannels: [],
+      events: [],
     };
     const stage = (name: string, extra: Record<string, unknown> = {}) => {
       if (!timingEnabled) return;
@@ -819,6 +821,11 @@ export function streamQoder(
       }
 
       if (trace.enabled && trace.base) {
+        writeFileSync(
+          `${trace.base}.events.jsonl`,
+          trace.events.map((event) => JSON.stringify(event)).join("\n") + (trace.events.length > 0 ? "\n" : ""),
+          "utf8",
+        );
         writeFileSync(
           `${trace.base}.summary.json`,
           JSON.stringify(
