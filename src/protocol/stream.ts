@@ -167,6 +167,13 @@ export function streamQoder(
   };
 
   (async () => {
+    const timingEnabled = process.env.QODER_DEBUG_TIMING === "1";
+    const timingStart = performance.now();
+    let timingIdentity = timingStart;
+    let timingPrepared = timingStart;
+    let timingEncoded = timingStart;
+    let timingHeaders = timingStart;
+    let timingFirstByte = 0;
     try {
       const providerMode = model.provider === "qoder-cn" ? "cn" : "global";
       const region = getQoderRegionConfig(providerMode);
@@ -188,6 +195,7 @@ export function streamQoder(
       const name = ident.name || region.userNameFallback;
       const email = ident.email || region.userEmailFallback;
       const machineID = ident.machineID || getMachineId();
+      timingIdentity = performance.now();
 
       // Both providers expose the upstream display_name (whitespace stripped)
       // as the pi id. Read the original key from cached/static config so the
@@ -275,6 +283,8 @@ export function streamQoder(
         parameters.enable_thinking = false;
       }
 
+      timingPrepared = performance.now();
+
       const reqBody: Record<string, unknown> = {
         request_id: crypto.randomUUID(),
         request_set_id: recordID,
@@ -357,6 +367,7 @@ export function streamQoder(
 
       const bodyBytes = Buffer.from(JSON.stringify(reqBody));
       const encodedBytes = qoderEncodeBody(bodyBytes);
+      timingEncoded = performance.now();
 
       const chatURL = getQoderChatURL(providerMode);
 
@@ -384,6 +395,7 @@ export function streamQoder(
         body: encodedBytes as unknown as BodyInit,
         signal: options?.signal,
       });
+      timingHeaders = performance.now();
 
       if (!response.ok) {
         const errText = await response.text();
@@ -415,6 +427,9 @@ export function streamQoder(
       while (!sawDone) {
         const { done, value } = await reader.read();
         if (done) break;
+        if (!timingFirstByte && value && value.byteLength > 0) {
+          timingFirstByte = performance.now();
+        }
 
         // Drop consumed prefix before appending so we do not keep growing a
         // dead head of the string across chunks.
@@ -675,6 +690,29 @@ export function streamQoder(
       // Otherwise keep whatever finish_reason set upstream (defaults to "stop").
       // Never overwrite a meaningful finish_reason ("length", "content_filter",
       // ...) with "stop".
+      if (timingEnabled) {
+        const timingEnd = performance.now();
+        console.error(
+          "[pi-provider-qoder timing]",
+          JSON.stringify({
+            model: model.id,
+            messages: normalizedMessages.length + (systemText ? 1 : 0),
+            tools: toolsRaw?.length ?? 0,
+            bodyBytes: bodyBytes.length,
+            identityMs: Math.round(timingIdentity - timingStart),
+            prepareMs: Math.round(timingPrepared - timingIdentity),
+            encodeSignMs: Math.round(timingEncoded - timingPrepared),
+            headersMs: Math.round(timingHeaders - timingEncoded),
+            firstByteMs: timingFirstByte ? Math.round(timingFirstByte - timingStart) : null,
+            streamMs: timingFirstByte ? Math.round(timingEnd - timingFirstByte) : null,
+            totalMs: Math.round(timingEnd - timingStart),
+            cacheRead: output.usage.cacheRead,
+            input: output.usage.input,
+            output: output.usage.output,
+          }),
+        );
+      }
+
       stream.push({
         type: "done",
         reason: output.stopReason as Extract<AssistantMessage["stopReason"], "stop" | "length" | "toolUse">,
