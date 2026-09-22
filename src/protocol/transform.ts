@@ -34,6 +34,7 @@ type QoderContent = string | Array<QoderTextPart | QoderImagePart>;
 interface QoderMessage {
   role: "user" | "assistant" | "tool" | "system";
   content: QoderContent | null;
+  reasoning_content?: string;
   tool_calls?: QoderToolCall[];
   tool_call_id?: string;
 }
@@ -137,6 +138,7 @@ export function transformMessagesForQoder(messages: Message[]): QoderMessage[] {
     } else if (msg.role === "assistant") {
       const am = msg as AssistantMessage;
       let content = "";
+      let reasoningContent = "";
       const toolCalls: QoderToolCall[] = [];
 
       if (Array.isArray(am.content)) {
@@ -144,8 +146,10 @@ export function transformMessagesForQoder(messages: Message[]): QoderMessage[] {
           if (block.type === "text") {
             content += (block as TextContent).text;
           } else if (block.type === "thinking") {
-            // Include thinking tags if reasoning is on
-            content += `<thinking>${(block as ThinkingContent).thinking}</thinking>\n\n`;
+            // Qoder/qodercli replays reasoning out-of-band. Keeping thinking
+            // inside visible content can teach reasoning models a textual
+            // pseudo-protocol and degrade later structured tool calls.
+            reasoningContent += (block as ThinkingContent).thinking;
           } else if (block.type === "toolCall") {
             const tc = block as ToolCall;
             toolCalls.push({
@@ -165,12 +169,16 @@ export function transformMessagesForQoder(messages: Message[]): QoderMessage[] {
       // Qoder's gateway drops assistant messages whose content is null, which
       // orphans the following tool_result and makes dmodel/ultimate upstreams
       // reject the request ("tool must follow a message with tool_calls").
-      // When an assistant turn has tool calls but no text/thinking, inject a
-      // single-space placeholder so the gateway keeps the message.
+      // When an assistant turn has tool calls but no visible text, inject a
+      // single-space placeholder so the gateway keeps the message. Reasoning
+      // stays separate in reasoning_content.
       const mapped: QoderMessage = {
         role: "assistant",
         content: content || (toolCalls.length > 0 ? " " : null),
       };
+      if (reasoningContent) {
+        mapped.reasoning_content = reasoningContent;
+      }
       if (toolCalls.length > 0) {
         mapped.tool_calls = toolCalls;
       }
