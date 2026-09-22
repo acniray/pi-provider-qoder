@@ -174,7 +174,21 @@ export function streamQoder(
     let timingEncoded = timingStart;
     let timingHeaders = timingStart;
     let timingFirstByte = 0;
+    const stage = (name: string, extra: Record<string, unknown> = {}) => {
+      if (!timingEnabled) return;
+      console.error(
+        "[pi-provider-qoder stage]",
+        JSON.stringify({
+          stage: name,
+          model: model.id,
+          provider: model.provider,
+          elapsedMs: Math.round(performance.now() - timingStart),
+          ...extra,
+        }),
+      );
+    };
     try {
+      stage("begin");
       const providerMode = model.provider === "qoder-cn" ? "cn" : "global";
       const region = getQoderRegionConfig(providerMode);
       const accessToken = options?.apiKey;
@@ -190,7 +204,9 @@ export function streamQoder(
       // credentials in its own agent.db, not in ~/.pi/agent/auth.json, so a
       // cache miss would otherwise send uid "qoder-user" and Qoder CN rejects
       // it with "Login expired" (105).
+      stage("identity:start");
       const ident = await resolveQoderIdentity(accessToken, model.provider, providerMode);
+      stage("identity:done");
       const userID = ident.userID || "qoder-user";
       const name = ident.name || region.userNameFallback;
       const email = ident.email || region.userEmailFallback;
@@ -379,6 +395,11 @@ export function streamQoder(
 
       const modelSource = modelConfig.source || "system";
 
+      stage("fetch:start", {
+        bodyBytes: bodyBytes.length,
+        messages: normalizedMessages.length + (systemText ? 1 : 0),
+        tools: toolsRaw?.length ?? 0,
+      });
       const response = await fetch(chatURL, {
         method: "POST",
         headers: {
@@ -394,6 +415,7 @@ export function streamQoder(
         signal: options?.signal,
       });
       timingHeaders = performance.now();
+      stage("fetch:headers", { status: response.status });
 
       if (!response.ok) {
         const errText = await response.text();
@@ -427,6 +449,7 @@ export function streamQoder(
         if (done) break;
         if (!timingFirstByte && value && value.byteLength > 0) {
           timingFirstByte = performance.now();
+          stage("stream:first-byte", { chunkBytes: value.byteLength });
         }
 
         // Drop consumed prefix before appending so we do not keep growing a
@@ -718,6 +741,7 @@ export function streamQoder(
       });
       stream.end();
     } catch (e: unknown) {
+      stage("error", { message: e instanceof Error ? e.message : String(e) });
       output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage = e instanceof Error ? e.message : String(e);
       stream.push({ type: "error", reason: output.stopReason, error: output });
