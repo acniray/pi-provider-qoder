@@ -157,7 +157,7 @@ describe("Qoder model cache", () => {
     expect(getCachedModels("global").map((model) => model.id)).toEqual(["Ultimate"]);
   });
 
-  it("records a 1M context window when the catalog omits context_config", async () => {
+  it("uses max_input_tokens as the normal context window when context_config is not selected", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue({
@@ -172,7 +172,7 @@ describe("Qoder model cache", () => {
     await updateQoderModelsCache("access-token", "user-id", "Test User", "test@example.com", "global");
 
     const cache = JSON.parse(readFileSync(CACHE_PATHS.global, "utf8"));
-    expect(cache.models[0].contextWindow).toBe(1_000_000);
+    expect(cache.models[0].contextWindow).toBe(180_000);
   });
 
   it("records the advertised context_config max, even when it is below 1M", async () => {
