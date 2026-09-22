@@ -30,8 +30,10 @@ function normalize(x:J):J{
 }
 
 function short(v:J){
-  const s=JSON.stringify(v);
-  return s.length>600?s.slice(0,600)+"...":s;
+  if (v === undefined) return "<undefined>";
+  const encoded = JSON.stringify(v);
+  const s = encoded === undefined ? String(v) : encoded;
+  return s.length > 600 ? s.slice(0, 600) + "..." : s;
 }
 
 const diffs:string[]=[];
