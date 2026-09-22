@@ -18,7 +18,15 @@ export const ZERO_COST = Object.freeze({ input: 0, output: 0, cacheRead: 0, cach
  * the documented upstream ceiling so reasoning chains and long generations
  * are not truncated.
  */
-export const MAX_OUTPUT_TOKENS = 131072;
+/**
+ * Match qodercli's default generation budget. Larger values can increase
+ * reservation/prefill pressure and diverge from the official client.
+ * Override only for explicit experiments.
+ */
+export const MAX_OUTPUT_TOKENS = (() => {
+  const raw = Number.parseInt(process.env.QODER_MAX_OUTPUT_TOKENS || "", 10);
+  return Number.isFinite(raw) && raw > 0 ? raw : 32000;
+})();
 
 /**
  * Fallback context window when the catalog omits `context_config`.
@@ -28,7 +36,13 @@ export const MAX_OUTPUT_TOKENS = 131072;
  * through 1,000K tokens). When `context_config` is present we use its largest
  * `token_count` instead, so models that truly advertise 200K/256K stay there.
  */
-export const DEFAULT_CONTEXT_WINDOW = 1000000;
+/** Official-client-like fallback when the catalog omits max_input_tokens. */
+export const DEFAULT_CONTEXT_WINDOW = 200000;
+
+function preferMaxContext(): boolean {
+  const mode = (process.env.QODER_CONTEXT_MODE || "").trim().toLowerCase();
+  return mode === "max" || mode === "1m" || mode === "largest";
+}
 
 /** Shape of a single entry returned by the Qoder /model/list endpoint. */
 export interface QoderModelEntry {
@@ -529,12 +543,23 @@ export function getCachedModels(mode: QoderMode): QoderModelDef[] {
   const data = readParsedModelCache(mode);
   if (data && Array.isArray(data.models)) {
     const models = data.models.map((model: QoderModelDef) => {
-      const config = data.configs?.[model.id] as QoderModelEntry | undefined;
+      const config =
+        (data.configs?.[model.id] as QoderModelEntry | undefined) ??
+        (Object.values(data.configs || {}).find(
+          (entry) =>
+            entry &&
+            typeof entry === "object" &&
+            toQoderModelId((entry as QoderModelEntry).display_name) === model.id,
+        ) as QoderModelEntry | undefined);
       const display = config?.display_name;
       const staticModel = (mode === "cn" ? staticCnModels : staticModels).find((seed) => seed.upstreamKey === model.id);
-      if (display) return { ...model, id: toQoderModelId(display), name: display };
-      if (staticModel) return { ...model, id: staticModel.id, name: staticModel.name };
-      return model.name ? { ...model, id: toQoderModelId(model.name) } : model;
+      const perfDefaults = {
+        contextWindow: config ? contextWindowFromCatalog(config) : model.contextWindow,
+        maxTokens: MAX_OUTPUT_TOKENS,
+      };
+      if (display) return { ...model, ...perfDefaults, id: toQoderModelId(display), name: display };
+      if (staticModel) return { ...model, ...perfDefaults, id: staticModel.id, name: staticModel.name };
+      return model.name ? { ...model, ...perfDefaults, id: toQoderModelId(model.name) } : { ...model, ...perfDefaults };
     });
     // Older releases injected `auto` without a corresponding service config.
     // Keep an explicitly enabled service model, but drop the legacy fallback.
@@ -551,7 +576,7 @@ export function getCachedModelConfig(modelId: string, mode: QoderMode): QoderMod
   if (data) {
     const direct = data.configs?.[modelId] as QoderModelEntry | undefined;
     if (direct && toQoderModelId(direct.display_name) === modelId) {
-      return withMaxContextAsDefault(direct);
+      return preferMaxContext() ? withMaxContextAsDefault(direct) : direct;
     }
 
     // Read old cache shapes without preserving their raw-key aliases.
@@ -560,7 +585,7 @@ export function getCachedModelConfig(modelId: string, mode: QoderMode): QoderMod
         entry && typeof entry === "object" && toQoderModelId((entry as QoderModelEntry).display_name) === modelId,
     ) as QoderModelEntry | undefined;
     if (legacyEntry) {
-      return withMaxContextAsDefault(legacyEntry);
+      return preferMaxContext() ? withMaxContextAsDefault(legacyEntry) : legacyEntry;
     }
   }
 
@@ -578,6 +603,13 @@ export function getCachedModelConfig(modelId: string, mode: QoderMode): QoderMod
 
 /** Resolve contextWindow from a catalog entry. Exported for tests. */
 export function contextWindowFromCatalog(entry: QoderModelEntry): number {
+  // qodercli uses max_input_tokens as the normal model budget. The selectable
+  // context_config entries (200K/400K/1M) are explicit modes, not a reason to
+  // silently make every session a 1M-context session.
+  if (!preferMaxContext() && typeof entry.max_input_tokens === "number" && entry.max_input_tokens > 0) {
+    return entry.max_input_tokens;
+  }
+
   const contextConfig = entry.context_config;
   if (contextConfig && typeof contextConfig === "object") {
     let advertised = 0;
@@ -587,6 +619,10 @@ export function contextWindowFromCatalog(entry: QoderModelEntry): number {
       }
     }
     if (advertised > 0) return advertised;
+  }
+
+  if (typeof entry.max_input_tokens === "number" && entry.max_input_tokens > 0) {
+    return entry.max_input_tokens;
   }
   return DEFAULT_CONTEXT_WINDOW;
 }
