@@ -8,17 +8,6 @@ import { getQoderBaseUrl, getQoderModelListURL, getQoderRegionConfig, type Qoder
 export const ZERO_COST = Object.freeze({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
 
 /**
- * Maximum output tokens sent per request. Aliyun Model Studio (the upstream
- * behind Qoder's CN catalog) documents Max Output Length = 131072 for every
- * model we expose (qwen3.8-max/flash, qwen3.7-max/plus/flash), in both normal
- * and thinking modes (thinking chain alone goes up to 262144). The Qoder
- * /model/list catalog does not return a per-model output cap, so this single
- * constant is the source of truth for both static models and request sending.
- * qodercli ships a conservative 32e3 default and caps its UI at 65536; we use
- * the documented upstream ceiling so reasoning chains and long generations
- * are not truncated.
- */
-/**
  * Match qodercli's default generation budget. Larger values can increase
  * reservation/prefill pressure and diverge from the official client.
  * Override only for explicit experiments.
@@ -29,14 +18,9 @@ export const MAX_OUTPUT_TOKENS = (() => {
 })();
 
 /**
- * Fallback context window when the catalog omits `context_config`.
- *
- * Qoder's `/model/list` often ships `max_input_tokens` as a stale 180K floor
- * even for models that accept 1M-token prompts (verified against global `lite`
- * through 1,000K tokens). When `context_config` is present we use its largest
- * `token_count` instead, so models that truly advertise 200K/256K stay there.
+ * Official-client-like fallback when the catalog omits max_input_tokens.
+ * Larger selectable context_config modes remain available via QODER_CONTEXT_MODE=max.
  */
-/** Official-client-like fallback when the catalog omits max_input_tokens. */
 export const DEFAULT_CONTEXT_WINDOW = 200000;
 
 function preferMaxContext(): boolean {
