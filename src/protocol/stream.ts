@@ -313,7 +313,10 @@ export function streamQoder(
         is_retry: false,
         source: 1,
         version: "3",
-        session_type: "qodercli",
+        // Match the official clients. The CN package uses qoderclicn;
+        // global uses qodercli. This may affect server-side agent/tool templates
+        // on long multi-turn conversations even when simple tool probes work.
+        session_type: providerMode === "cn" ? "qoderclicn" : "qodercli",
         agent_id: "agent_common",
         task_id: "common",
         code_language: "",
