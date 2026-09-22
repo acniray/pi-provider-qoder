@@ -233,7 +233,7 @@ function variantBodies(raw: JsonObject): Array<{ label: string; body: JsonObject
   const officialPlusToolChoice = clone(officialVisible);
   officialPlusToolChoice.parameters.tool_choice = "auto";
 
-  return [
+  const variants = [
     { label: "baseline-current", body: baseline },
     { label: "session_type=qoderclicn", body: sessionType },
     { label: "official-model_config", body: modelConfig },
@@ -244,6 +244,36 @@ function variantBodies(raw: JsonObject): Array<{ label: string; body: JsonObject
     { label: "all-visible-official", body: officialVisible },
     { label: "all-visible+tool_choice", body: officialPlusToolChoice },
   ];
+
+  // Never reuse request/session IDs across A/B variants. Qoder uses these for
+  // request identity and cache/session affinity; reusing them can make a later
+  // variant observe the previous request instead of the field being tested.
+  for (const variant of variants) {
+    const requestId = crypto.randomUUID();
+    const recordId = crypto
+      .createHash("sha256")
+      .update("qoder-legacy-probe-variant")
+      .update(variant.label)
+      .update(requestId)
+      .digest("hex")
+      .slice(0, 16);
+
+    variant.body.request_id = requestId;
+    variant.body.session_id = `pi-qoder-legacy-probe-${crypto.randomUUID()}`;
+
+    if (
+      variant.label === "official-request-ids" ||
+      variant.label.startsWith("all-visible")
+    ) {
+      variant.body.chat_record_id = requestId;
+      variant.body.request_set_id = requestId;
+    } else {
+      variant.body.chat_record_id = recordId;
+      variant.body.request_set_id = recordId;
+    }
+  }
+
+  return variants;
 }
 
 function safePreview(text: string): string {
