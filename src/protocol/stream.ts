@@ -283,9 +283,11 @@ export function streamQoder(
       // the Qoder server can maintain prompt cache affinity across consecutive
       // requests. Fall back to a random id only when no sessionId is available.
       const stablePart = stableHash("qoder-session", userID, qoderModel);
-      const sessionID = options?.sessionId
-        ? `${stablePart}-${options.sessionId}`
-        : `${stablePart}-${crypto.randomUUID()}`;
+      const rotateSessionId = process.env.QODER_ROTATE_SESSION_ID === "1";
+      const sessionID =
+        options?.sessionId && !rotateSessionId
+          ? `${stablePart}-${options.sessionId}`
+          : `${stablePart}-${crypto.randomUUID()}`;
 
       // Match qodercli's conservative default output budget. Pi may cap it
       // lower for special calls, and QODER_MAX_OUTPUT_TOKENS can opt into a
