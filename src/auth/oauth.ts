@@ -101,6 +101,10 @@ export async function autoLoginQoderFromEnvironment(providerID: string, mode: Qo
   const pat = getQoderPatForMode(mode);
   if (!pat) return;
 
+  const timingEnabled = process.env.QODER_DEBUG_TIMING === "1";
+  const timingStart = performance.now();
+  let authSource: "cache" | "exchange" = "exchange";
+
   // Fast path: PAT-based credentials already persist the original PAT in the
   // refresh field (pat|<PAT>|...). If the environment PAT is unchanged and the
   // exchanged job token is still valid, reuse it instead of paying for
@@ -114,6 +118,7 @@ export async function autoLoginQoderFromEnvironment(providerID: string, mode: Qo
     const { pat: cachedPat } = decodePatRefresh(cached.refresh);
     if (cachedPat === pat && cached.expires > Date.now()) {
       credentials = cached;
+      authSource = "cache";
       identityCache.set(`${providerID}:${cached.access}`, cached);
     }
   }
@@ -139,8 +144,22 @@ export async function autoLoginQoderFromEnvironment(providerID: string, mode: Qo
   // A fresh model cache means startup can be completely network-free. Refresh
   // only when stale/missing; this keeps list-models correct without adding an
   // unconditional third HTTP request to every new process.
-  if (isCacheStale(mode)) {
+  const modelCacheStale = isCacheStale(mode);
+  if (modelCacheStale) {
     await updateQoderModelsCache(qCreds.access, qCreds.userID, qCreds.name, qCreds.email, mode);
+  }
+
+  if (timingEnabled) {
+    console.error(
+      "[pi-provider-qoder startup]",
+      JSON.stringify({
+        provider: providerID,
+        mode,
+        auth: authSource,
+        modelCache: modelCacheStale ? "refresh" : "fresh",
+        totalMs: Math.round(performance.now() - timingStart),
+      }),
+    );
   }
 }
 
