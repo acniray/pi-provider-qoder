@@ -175,6 +175,40 @@ describe("Qoder model cache", () => {
     expect(cache.models[0].contextWindow).toBe(180_000);
   });
 
+  it("uses live context_config capacity and max_output_tokens instead of the 180K baseline", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            chat: [
+              {
+                key: "gmodel",
+                enable: true,
+                display_name: "GLM-5.3",
+                max_input_tokens: 180000,
+                max_output_tokens: 65536,
+                context_config: {
+                  "200K": { token_count: 200000 },
+                  "400K": { token_count: 400000 },
+                  "1M": { token_count: 1000000, is_default: true },
+                },
+              },
+            ],
+          }),
+      }),
+    );
+
+    await updateQoderModelsCache("access-token", "user-id", "Test User", "test@example.com", "cn");
+
+    const cache = JSON.parse(readFileSync(CACHE_PATHS.cn, "utf8"));
+    expect(cache.models[0].contextWindow).toBe(1_000_000);
+    expect(cache.models[0].maxTokens).toBe(65_536);
+    expect(getCachedModels("cn")[0].contextWindow).toBe(1_000_000);
+    expect(getCachedModels("cn")[0].maxTokens).toBe(65_536);
+  });
+
   it("records the advertised context_config max, even when it is below 1M", async () => {
     vi.stubGlobal(
       "fetch",
