@@ -10,6 +10,7 @@ import {
   type SimpleStreamOptions,
   type TextContent,
   type ThinkingContent,
+  type Tool,
   type ToolCall,
 } from "@earendil-works/pi-ai";
 import { resolveQoderIdentity } from "../auth/oauth.js";
@@ -82,6 +83,61 @@ function contentToText(content: unknown): string {
   return "";
 }
 
+interface TranscriptSystemMessageLike {
+  role?: string;
+  content?: unknown;
+  sections?: Record<string, string | null>;
+  toolsAdded?: Tool[];
+  toolsRemoved?: Array<{ name: string }>;
+}
+
+/**
+ * Pi 0.86+ passes providers a TranscriptContext: the effective system prompt
+ * and tools are encoded in replayable system messages instead of top-level
+ * Context fields. Keep compatibility with both old and new hosts.
+ */
+export function resolveSystemText(context: Context): string {
+  const legacy = context as unknown as { systemPrompt?: unknown; messages?: unknown[] };
+  if (legacy.systemPrompt !== undefined) {
+    return contentToText(legacy.systemPrompt);
+  }
+
+  const content: string[] = [];
+  const sections = new Map<string, string>();
+  for (const raw of legacy.messages ?? []) {
+    const msg = raw as TranscriptSystemMessageLike;
+    if (msg?.role !== "system") continue;
+
+    const text = contentToText(msg.content);
+    if (text.length > 0) content.push(text);
+
+    for (const [name, value] of Object.entries(msg.sections ?? {})) {
+      if (value === null) sections.delete(name);
+      else sections.set(name, value);
+    }
+  }
+
+  return [...content, ...sections.values()].filter((part) => part.length > 0).join("\n\n");
+}
+
+export function resolveTools(context: Context): Tool[] | undefined {
+  const legacy = context as unknown as { tools?: Tool[]; messages?: unknown[] };
+  if (legacy.tools !== undefined) {
+    return legacy.tools;
+  }
+
+  const tools = new Map<string, Tool>();
+  for (const raw of legacy.messages ?? []) {
+    const msg = raw as TranscriptSystemMessageLike;
+    if (msg?.role !== "system") continue;
+
+    for (const removed of msg.toolsRemoved ?? []) tools.delete(removed.name);
+    for (const added of msg.toolsAdded ?? []) tools.set(added.name, added);
+  }
+
+  return tools.size > 0 ? [...tools.values()] : undefined;
+}
+
 export function streamQoder(
   model: Model<Api>,
   context: Context,
@@ -144,10 +200,11 @@ export function streamQoder(
       const isReasoning = !!modelConfig.is_reasoning;
 
       const normalizedMessages = transformMessagesForQoder(context.messages);
-      // OMP may supply the system prompt as a single-element content array;
-      // Qoder MessagesInputDto#content is a String and rejects an array with
-      // "Execution failed: set property ... MessagesInputDto#content". Normalize.
-      const systemText = contentToText(context.systemPrompt || "");
+      // Older pi hosts pass systemPrompt/tools directly on Context. Pi 0.86+
+      // passes TranscriptContext instead, where both are replayed through
+      // system messages.
+      const systemText = resolveSystemText(context);
+      const effectiveTools = resolveTools(context);
 
       let lastUserText = "";
       for (let i = normalizedMessages.length - 1; i >= 0; i--) {
@@ -181,7 +238,7 @@ export function streamQoder(
         maxTokens = options.maxTokens;
       }
 
-      const toolsRaw = context.tools && context.tools.length > 0 ? transformTools(context.tools) : undefined;
+      const toolsRaw = effectiveTools && effectiveTools.length > 0 ? transformTools(effectiveTools) : undefined;
       const recordID = stableChatRecordID(qoderModel, normalizedMessages, toolsRaw, maxTokens);
 
       // Map pi's thinking level (options.reasoning) to Qoder's request fields.
