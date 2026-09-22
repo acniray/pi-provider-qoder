@@ -101,11 +101,28 @@ export async function autoLoginQoderFromEnvironment(providerID: string, mode: Qo
   const pat = getQoderPatForMode(mode);
   if (!pat) return;
 
-  // An explicitly supplied PAT is authoritative. The auth file only stores
-  // the exchanged job token, so it cannot tell us whether the environment
-  // token changed. Re-exchange it on startup to avoid silently using an old
-  // account's credentials.
-  const credentials = await credentialsFromPat(pat, mode);
+  // Fast path: PAT-based credentials already persist the original PAT in the
+  // refresh field (pat|<PAT>|...). If the environment PAT is unchanged and the
+  // exchanged job token is still valid, reuse it instead of paying for
+  // /jobToken/exchange + /userinfo on every new pi/subagent process.
+  //
+  // credentialsFromPat() already stores expires with a 5-minute safety buffer,
+  // so expires > Date.now() is sufficient here.
+  const cached = getCachedCredentials("", providerID);
+  let credentials: OAuthCredentials | undefined;
+  if (cached?.access && cached.userID && cached.refresh && isPatRefresh(cached.refresh)) {
+    const { pat: cachedPat } = decodePatRefresh(cached.refresh);
+    if (cachedPat === pat && cached.expires > Date.now()) {
+      credentials = cached;
+      identityCache.set(`${providerID}:${cached.access}`, cached);
+    }
+  }
+
+  // Different PAT, expired token, legacy credential shape, or incomplete
+  // identity: exchange again and rebuild the cached credential.
+  if (!credentials) {
+    credentials = await credentialsFromPat(pat, mode);
+  }
 
   if (typeof AuthStorage?.create === "function") {
     try {
@@ -119,9 +136,12 @@ export async function autoLoginQoderFromEnvironment(providerID: string, mode: Qo
   }
 
   const qCreds = credentials as QoderCredentials;
-  // Wait for the model cache before the provider is registered. This matters
-  // for `pi --list-models`, which can exit before background work completes.
-  await updateQoderModelsCache(qCreds.access, qCreds.userID, qCreds.name, qCreds.email, mode);
+  // A fresh model cache means startup can be completely network-free. Refresh
+  // only when stale/missing; this keeps list-models correct without adding an
+  // unconditional third HTTP request to every new process.
+  if (isCacheStale(mode)) {
+    await updateQoderModelsCache(qCreds.access, qCreds.userID, qCreds.name, qCreds.email, mode);
+  }
 }
 
 /**
