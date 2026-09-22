@@ -1,4 +1,5 @@
 import crypto from "node:crypto";
+import { writeFileSync } from "node:fs";
 import * as PiAi from "@earendil-works/pi-ai";
 import {
   type Api,
@@ -266,6 +267,35 @@ export function streamQoder(
           begin_at: Date.now(),
         },
       };
+
+      const debugDumpPath = process.env.QODER_DEBUG_REQUEST_DUMP?.trim();
+      if (debugDumpPath) {
+        // Diagnostic-only dump of the decoded request body. No auth headers,
+        // PATs, job tokens, COSY payloads, or other credentials are included.
+        writeFileSync(
+          debugDumpPath,
+          JSON.stringify(
+            {
+              provider: model.provider,
+              model: model.id,
+              qoderModel,
+              context: {
+                systemPrompt: context.systemPrompt,
+                messages: context.messages,
+                tools: context.tools?.map((tool) => ({
+                  name: tool.name,
+                  description: tool.description,
+                  parameters: tool.parameters,
+                })),
+              },
+              requestBody: reqBody,
+            },
+            null,
+            2,
+          ),
+          "utf8",
+        );
+      }
 
       const bodyBytes = Buffer.from(JSON.stringify(reqBody));
       const encodedBytes = qoderEncodeBody(bodyBytes);
