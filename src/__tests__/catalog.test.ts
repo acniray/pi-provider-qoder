@@ -3,6 +3,7 @@ import {
   contextWindowFromCatalog,
   DEFAULT_CONTEXT_WINDOW,
   getCachedModelConfig,
+  outputTokensFromCatalog,
   staticCnModels,
   staticModels,
   toQoderModelId,
@@ -119,7 +120,7 @@ describe("staticCnModels", () => {
 });
 
 describe("contextWindowFromCatalog", () => {
-  it("prefers max_input_tokens for the normal context budget", () => {
+  it("uses the largest live context_config capacity instead of max_input_tokens", () => {
     expect(
       contextWindowFromCatalog({
         max_input_tokens: 180000,
@@ -128,24 +129,7 @@ describe("contextWindowFromCatalog", () => {
           large: { token_count: 1000000 },
         },
       }),
-    ).toBe(180000);
-  });
-
-  it("uses the largest context_config token_count when max mode is explicitly enabled", () => {
-    process.env.QODER_CONTEXT_MODE = "max";
-    try {
-      expect(
-        contextWindowFromCatalog({
-          max_input_tokens: 180000,
-          context_config: {
-            small: { token_count: 200000, is_default: true },
-            large: { token_count: 1000000 },
-          },
-        }),
-      ).toBe(1000000);
-    } finally {
-      delete process.env.QODER_CONTEXT_MODE;
-    }
+    ).toBe(1000000);
   });
 
   it("keeps an advertised 200K window instead of the 1M fallback", () => {
@@ -163,6 +147,16 @@ describe("contextWindowFromCatalog", () => {
   it("falls back to the conservative default when the catalog provides no context limit", () => {
     expect(contextWindowFromCatalog({ key: "lite" })).toBe(DEFAULT_CONTEXT_WINDOW);
     expect(DEFAULT_CONTEXT_WINDOW).toBe(200000);
+  });
+});
+
+describe("outputTokensFromCatalog", () => {
+  it("uses max_output_tokens from the live catalog", () => {
+    expect(outputTokensFromCatalog({ max_output_tokens: 65536 })).toBe(65536);
+  });
+
+  it("falls back when max_output_tokens is absent", () => {
+    expect(outputTokensFromCatalog({})).toBeGreaterThan(0);
   });
 });
 
