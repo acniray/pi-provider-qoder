@@ -2,7 +2,7 @@
  * Qoder CN GLM-5.3 tool-shape A/B probe.
  * Isolates whether the tool name, description, or schema causes XML-style calls.
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import crypto from "node:crypto";
@@ -197,7 +197,14 @@ async function main(){
   const results=[];
   for(const v of variants){
     process.stdout.write(`[${v.label}] ... `);
-    const r=await send(v.label,body(raw,v),raw,c);
+    const requestBody=body(raw,v);
+    if (
+      process.env.QODER_DEBUG_PROBE_DUMP?.trim() &&
+      v.label === "bash-exact-pi-shape-chinese-prompt"
+    ) {
+      writeFileSync(process.env.QODER_DEBUG_PROBE_DUMP.trim(), JSON.stringify(requestBody, null, 2), "utf8");
+    }
+    const r=await send(v.label,requestBody,raw,c);
     results.push(r);
     console.log(`HTTP ${r.http} structured=${r.structured} xml=${r.xml} finish=${r.finish||"-"} total=${r.total}ms`);
     if(r.preview) console.log(`  text: ${r.preview}`);
