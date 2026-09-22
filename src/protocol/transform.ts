@@ -75,6 +75,33 @@ export function transformTools(tools: Tool[]): QoderTool[] {
   }));
 }
 
+/**
+ * Diagnostic-only replay sanitizer.
+ *
+ * Some Qoder-routed reasoning models occasionally leak their internal tool
+ * protocol (DSML / textual tool_call markers) into a persisted thinking block.
+ * Replaying that verbatim can teach the same model to continue the leaked
+ * protocol on later turns. When explicitly enabled, keep the legitimate
+ * reasoning prefix and discard only the leaked protocol suffix.
+ */
+export function sanitizeHistoricalReasoning(text: string): string {
+  if (process.env.QODER_SANITIZE_REPLAY_DSML !== "1") return text;
+
+  const markers = [
+    /<[^>\n]*DSML[^>\n]*>/i,
+    /<\/?tool_call\b[^>]*>/i,
+    /<\/?function_call\b[^>]*>/i,
+  ];
+
+  let cut = text.length;
+  for (const marker of markers) {
+    const match = marker.exec(text);
+    if (match && match.index < cut) cut = match.index;
+  }
+
+  return text.slice(0, cut).trimEnd();
+}
+
 export function transformMessagesForQoder(messages: Message[]): QoderMessage[] {
   const normalizedMessages: QoderMessage[] = [];
 
@@ -153,7 +180,7 @@ export function transformMessagesForQoder(messages: Message[]): QoderMessage[] {
           } else if (block.type === "thinking") {
             // Match qodercli/OpenAI reasoning replay: thinking belongs in
             // reasoning_content, never inside visible assistant content.
-            reasoningContent += (block as ThinkingContent).thinking;
+            reasoningContent += sanitizeHistoricalReasoning((block as ThinkingContent).thinking);
           } else if (block.type === "toolCall") {
             const tc = block as ToolCall;
             toolCalls.push({
