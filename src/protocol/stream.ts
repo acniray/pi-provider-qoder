@@ -238,11 +238,9 @@ export function streamQoder(
         ? `${stablePart}-${options.sessionId}`
         : `${stablePart}-${crypto.randomUUID()}`;
 
-      // Qoder's catalog exposes no per-model output cap, so we use the
-      // documented upstream ceiling (MAX_OUTPUT_TOKENS = 131072, see models.ts)
-      // and let pi cap it lower when the caller sets options.maxTokens (e.g.
-      // compaction at 40K). This avoids truncating reasoning chains / long
-      // generations that the 32K default would cut off.
+      // Match qodercli's conservative default output budget. Pi may cap it
+      // lower for special calls, and QODER_MAX_OUTPUT_TOKENS can opt into a
+      // larger budget when a workflow genuinely needs long generations.
       let maxTokens = MAX_OUTPUT_TOKENS;
       if (options?.maxTokens && options.maxTokens < maxTokens) {
         maxTokens = options.maxTokens;
